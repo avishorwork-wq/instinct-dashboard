@@ -1,6 +1,6 @@
 /* Dashboard sign-in. Google Identity Services ID-token flow.
-   The ID token goes to the Apps Script backend, which verifies it with Google
-   and returns an opaque session token. Session is kept in sessionStorage
+   The ID token goes to the backend (Cloudflare Worker), which verifies it with
+   Google and returns an opaque session token. Session is kept in sessionStorage
    (survives reloads in the same tab, cleared when the tab closes). */
 (function () {
   var cfg = window.DASH_CONFIG || {};
@@ -36,10 +36,13 @@
       return r;
     },
     renderSignIn: function (el, onSignedIn, onError) {
-      if (!window.google || !google.accounts || !google.accounts.id) {
-        onError(new Error('google_lib_missing'));
-        return;
+      var attempts = 0;
+      function waitForGoogle() {
+        if (window.google && google.accounts && google.accounts.id) { render(); return; }
+        if (++attempts > 60) { onError(new Error('google_lib_missing')); return; }
+        setTimeout(waitForGoogle, 500);
       }
+      function render() {
       google.accounts.id.initialize({
         client_id: cfg.googleClientId,
         callback: async function (resp) {
@@ -52,6 +55,8 @@
         }
       });
       google.accounts.id.renderButton(el, { theme: 'filled_black', size: 'large', text: 'signin_with', shape: 'pill' });
+      }
+      waitForGoogle();
     },
     signOut: async function () {
       var s = session; clearSession();
