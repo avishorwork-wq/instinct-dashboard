@@ -180,7 +180,7 @@
     DashAuth.renderSignIn($('signin-btn'), function () { enter(); }, function (e) {
       err.hidden = false;
       err.textContent = e && e.message === 'not_allowed'
-        ? 'This Google account is not allowed on this dashboard.'
+        ? 'This Google account is not approved for this dashboard. Pick a different Google account and try again.'
         : 'Sign-in did not complete (' + (e && e.message || 'error') + '). Try again.';
     });
   }
