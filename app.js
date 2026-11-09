@@ -95,6 +95,15 @@
   function safeLink(url) { return /^https?:\/\//i.test(String(url || '')) ? esc(url) : '#'; }
   function linkHtml(links) { return (links || []).map(function(l){return '<a target="_blank" rel="noopener noreferrer" href="'+safeLink(l.url)+'">'+esc(l.label || l.name || l.url)+'</a>';}).join(' · '); }
   function fullTime(iso) { return iso ? esc(new Date(iso).toLocaleString()) : 'Not yet'; }
+  function noteHtml(n) {
+    return '<li class="request-note"><time>'+fullTime(n.ts)+'</time> '+esc(n.author || '')+(n.state?'<span class="status-pill">'+esc(n.state==='open'?'Open request':'Answered')+'</span>':'')+'<p class="prewrap">'+esc(n.text || '')+'</p>'+(n.image?galleryHtml([{src:n.image,caption:'Note attachment',added_at:n.ts}]):'')+(n.replies || []).map(function(r){return '<div class="note-reply"><small>'+fullTime(r.ts)+' · Instinct</small><p class="prewrap">'+esc(r.text)+'</p>'+(r.image?galleryHtml([{src:r.image,caption:'Reply attachment',added_at:r.ts}]):'')+'</div>';}).join('')+'</li>';
+  }
+  async function compressedAttachment(file) {
+    if(!file) return '';
+    if(!/^image\//.test(file.type)) throw new Error('Choose an image file');
+    var url=URL.createObjectURL(file);
+    try {var img=new Image();img.src=url;await img.decode();var scale=Math.min(1,1200/img.width,1200/img.height);var canvas=document.createElement('canvas');canvas.width=img.width*scale;canvas.height=img.height*scale;canvas.getContext('2d').drawImage(img,0,0,canvas.width,canvas.height);for(var q of [0.8,0.6,0.4,0.2]){var data=canvas.toDataURL('image/jpeg',q);if(data.length<=110000)return data;}throw new Error('Image too large. Try a smaller crop.');}finally{URL.revokeObjectURL(url);}
+  }
   function resultHtml(result) {
     if(!result || (!result.url && !result.summary)) return '';
     return '<div class="result-box"><strong>Result</strong><p>'+esc(result.summary || '')+'</p>'+(result.url?'<a href="'+safeLink(result.url)+'" target="_blank" rel="noopener noreferrer">'+esc(result.url)+'</a>':'')+'</div>';
@@ -117,9 +126,9 @@
       var active=tasks.filter(function(t){return t.status==='in_progress';}).length;
       var blocked=tasks.filter(function(t){return t.status==='blocked';}).length;
       var percent=tasks.length ? Math.round(done/tasks.length*100) : 0;
-      return '<div class="project-summary"><strong>'+esc(p.name)+'</strong><span>'+done+' of '+tasks.length+' done · '+active+' active · '+blocked+' blocked · '+percent+'%</span><progress max="100" value="'+percent+'"></progress>'+(p.details ? '<p>'+esc(p.details)+'</p>' : '')+(p.status_text ? '<p>'+esc(p.status_text)+'</p>':'')+linkHtml(p.links)+resultHtml(p.result)+'<div class="project-notes"><h4>Project notes</h4>'+(p.note_history || []).map(function(n){return '<p><small>'+fullTime(n.ts)+' · '+esc(n.author)+'</small><br>'+esc(n.text)+'</p>';}).join('')+'<input class="note-input" id="project-note-'+esc(p.id)+'" placeholder="Add a project note"><button class="btn ghost" data-project-note="'+esc(p.id)+'">Add note</button></div></div>';
+      return '<div class="project-summary"><strong>'+esc(p.name)+'</strong><span>'+done+' of '+tasks.length+' done · '+active+' active · '+blocked+' blocked · '+percent+'%</span><progress max="100" value="'+percent+'"></progress>'+(p.details ? '<p>'+esc(p.details)+'</p>' : '')+(p.status_text ? '<p>'+esc(p.status_text)+'</p>':'')+linkHtml(p.links)+resultHtml(p.result)+'<div class="project-notes"><h4>Project notes</h4>'+'<ol class="timeline">'+(p.note_history || []).slice().reverse().map(noteHtml).join('')+'</ol>'+'<input class="note-input" id="project-note-'+esc(p.id)+'" placeholder="Add a project note or request"><input type="file" accept="image/*" id="project-image-'+esc(p.id)+'"><button class="btn ghost" data-project-note="'+esc(p.id)+'">Add note</button></div></div>';
     }).join('');
-    Array.from(box.querySelectorAll('[data-project-note]')).forEach(function(b){b.onclick=function(){var input=$('project-note-'+b.dataset.projectNote);if(input.value.trim())doAction('addProjectNote',{id:b.dataset.projectNote,notes:input.value.trim()});};});
+    Array.from(box.querySelectorAll('[data-project-note]')).forEach(function(b){b.onclick=async function(){try{b.disabled=true;var input=$('project-note-'+b.dataset.projectNote);var image=await compressedAttachment($('project-image-'+b.dataset.projectNote).files[0]);await doAction('addRequest',{project_id:b.dataset.projectNote,text:input.value.trim(),image:image});}catch(e){alert(e.message);}finally{b.disabled=false;}};});
     var gallery=$('project-gallery'); if(!gallery) {gallery=document.createElement('section');gallery.id='project-gallery';$('files-section').before(gallery);}
     gallery.innerHTML='<h3>Project gallery</h3>'+galleryHtml((state.data.images || []).filter(function(i){return state.project==='all' || i.project_id===state.project;}));
   }
@@ -131,7 +140,7 @@
     var timeline=(t.history || []).slice().reverse().map(function(h){
       return '<li><time>'+fullTime(h.ts)+'</time> <strong>'+esc(h.actor || 'Instinct')+'</strong> '+esc(h.action)+'<ul>'+Object.keys(h.changes || {}).map(function(k){var c=h.changes[k];return '<li>'+esc(k)+': '+esc(typeof c.to==='object'?JSON.stringify(c.to):c.to)+'</li>';}).join('')+'</ul></li>';
     }).join('');
-    var notes=(t.note_history || []).slice().reverse().map(function(n){return '<li><time>'+fullTime(n.ts)+'</time> '+esc(n.author || '')+'<p>'+esc(n.text)+'</p></li>';}).join('');
+    var notes=(t.note_history || []).slice().reverse().map(noteHtml).join('');
     var sub=(t.substeps || []).map(function(x){return '<li>'+esc(x.status || (x.done?'resolved':'open'))+' · '+esc(x.title || x.text || '')+(x.details?'<p>'+esc(x.details)+'</p>':'')+'</li>';}).join('');
     var reasoning=(t.reasoning || []).slice().reverse().map(function(r){
       return '<li><time>'+fullTime(r.ts)+'</time><p><strong>'+esc(r.decision)+'</strong></p><p>Why: '+esc(r.why)+'</p>'+['alternatives','assumptions','open_questions','outcome'].filter(function(k){return r[k]!==undefined;}).map(function(k){return '<p>'+esc(k.replace(/_/g,' '))+': '+esc(Array.isArray(r[k])?r[k].join('; '):r[k])+'</p>';}).join('')+'</li>';
@@ -151,7 +160,7 @@
       '<h4>Images and screenshots</h4>'+galleryHtml((state.data.images || []).filter(function(i){return i.task_id===t.id;}))+
       '<h4>Decisions &amp; reasoning</h4>'+(reasoning?'<ol class="timeline">'+reasoning+'</ol>':'<p>No decision summaries yet.</p>')+
       '<h4>History</h4>'+(timeline?'<ol class="timeline">'+timeline+'</ol>':'<p>No recorded history before detailed tracking was enabled.</p>')+
-      '</details><div class="task-actions"><button class="btn '+(resolved?'reopen':'resolve')+'" data-act="'+(resolved?'reopen':'resolve')+'">'+(resolved?'Reopen':'Resolve')+'</button><select class="prio" data-act="prio">'+opts+'</select><input class="note-input" placeholder="Add a timestamped note" data-act="note"><button class="btn ghost" data-act="addnote">Add</button></div></div>';
+      '</details><div class="task-actions"><button class="btn '+(resolved?'reopen':'resolve')+'" data-act="'+(resolved?'reopen':'resolve')+'">'+(resolved?'Reopen':'Resolve')+'</button><select class="prio" data-act="prio">'+opts+'</select><input class="note-input" placeholder="Add a note or request" data-act="note"><input type="file" accept="image/*" data-note-image><button class="btn ghost" data-act="addnote">Add</button></div></div>';
   }
 
   function tick() {
@@ -170,9 +179,8 @@
         if (act === 'resolve') el.onclick = function () { doAction('resolveTask', { id: id }); };
         if (act === 'reopen') el.onclick = function () { doAction('reopenTask', { id: id }); };
         if (act === 'prio') el.onchange = function () { doAction('setPriority', { id: id, priority: el.value }); };
-        if (act === 'addnote') el.onclick = function () {
-          var v = noteInput.value.trim();
-          if (v) doAction('addNote', { id: id, notes: v });
+        if (act === 'addnote') el.onclick = async function () {
+          try {el.disabled=true;var image=await compressedAttachment(card.querySelector('[data-note-image]').files[0]);var v=noteInput.value.trim();if(v || image)await doAction('addRequest',{task_id:id,text:v,image:image});}catch(e){alert(e.message);}finally{el.disabled=false;}
         };
       });
     });
