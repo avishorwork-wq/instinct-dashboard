@@ -127,6 +127,29 @@ function applyOpRaw(data, op) {
   const name = (op && op.op) || '';
   const ts = nowIso();
 
+  if (name === 'addImage') {
+    const t = data.tasks.find(t => t.id === op.task_id);
+    const project = data.projects.find(p => p.id === (op.project_id || (t && t.project_id)));
+    if (!t && !project) return {ok:false,error:'not_found'};
+    const src = String(op.data || op.url || '');
+    if (!/^https:\/\//i.test(src) && !/^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+$/.test(src)) return {ok:false,error:'invalid_image'};
+    if (src.length > 110000) return {ok:false,error:'image_too_large_max_110000_chars'};
+    data.images = data.images || [];
+    if (data.images.length >= 60 || JSON.stringify(data.images).length + src.length > 3000000) return {ok:false,error:'gallery_limit'};
+    const image = {id:op.id || crypto.randomUUID(),task_id:t ? t.id : '',project_id:project ? project.id : t.project_id,caption:String(op.caption || ''),src,added_at:ts};
+    const index = data.images.findIndex(i => i.id === image.id);
+    if (index >= 0) data.images[index] = image; else data.images.push(image);
+    if(t) t.updated_at=ts;
+    data.logs.push({ts,project_id:image.project_id,task_id:image.task_id,level:'info',message:'Image added: '+(image.caption || 'Screenshot')});
+    return {ok:true,op:name,id:image.id};
+  }
+  if (name === 'setResult') {
+    const target = op.task_id ? data.tasks.find(t => t.id === op.task_id) : data.projects.find(p => p.id === op.project_id);
+    if (!target) return {ok:false,error:'not_found'};
+    target.result={url:String(op.url || ''),summary:String(op.summary || ''),updated_at:ts}; target.updated_at=ts;
+    data.logs.push({ts,project_id:op.project_id || target.project_id,task_id:op.task_id || '',level:'done',message:'Result: '+target.result.summary});
+    return {ok:true,op:name};
+  }
   if (name === 'reasoning') {
     const t = data.tasks.find(t => t.id === (op.task_id || op.id));
     if (!t || !op.decision || !op.why) return {ok:false,error:t ? 'missing_fields' : 'not_found'};
@@ -142,6 +165,7 @@ function applyOpRaw(data, op) {
     data.tasks = data.tasks.filter(t => t.project_id !== op.id);
     data.logs = data.logs.filter(l => l.project_id !== op.id && !ids.has(l.task_id));
     data.files = data.files.filter(f => f.project_id !== op.id && !ids.has(f.task_id));
+    data.images = (data.images || []).filter(f => f.project_id !== op.id && !ids.has(f.task_id));
     return {ok:true,op:name,id:op.id};
   }
   if (name === 'deleteProject') { data.projects = data.projects.filter(p => p.id !== op.id); return {ok:true,op:name}; }
@@ -341,12 +365,13 @@ export class DashboardState {
     const adapter = {
       get: async (key, type) => {
         if (key !== 'data' && key !== 'v') return oldKV.get(key, type);
-        const value = await storage.get(key);
+        let value;
+        if (key === 'data') { const count = await storage.get('data_chunks') || 0; if(count) { const parts=[]; for(let i=0;i<count;i++) parts.push(await storage.get('data_'+i) || ''); value=parts.join(''); } else value=await storage.get(key); } else value=await storage.get(key);
         return type === 'json' && value ? JSON.parse(value) : (value || null);
       },
       put: async (key, value, opts) => {
         if (key !== 'data' && key !== 'v') return oldKV.put(key, value, opts);
-        await storage.put(key, value);
+        if(key==='data') { const count=Math.ceil(value.length/50000); for(let i=0;i<count;i++) await storage.put('data_'+i,value.slice(i*50000,(i+1)*50000)); await storage.put('data_chunks',count); } else await storage.put(key, value);
         if (key === 'v') for (const socket of this.ctx.getWebSockets()) {
           try { socket.send(JSON.stringify({v:Number(value)})); } catch (_) { }
         }
