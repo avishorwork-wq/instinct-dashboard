@@ -65,17 +65,18 @@ async function sessionEmail(env, token) {
   return await env.KV.get('s_' + token);
 }
 
+/* Returns {email} on success, or {reason:'not_allowed'|'bad_token', email?} on failure. */
 async function verifyGoogleToken(env, idToken) {
-  if (!idToken) return null;
+  if (!idToken) return { reason: 'bad_token' };
   const res = await fetch('https://oauth2.googleapis.com/tokeninfo?id_token=' + encodeURIComponent(idToken));
-  if (!res.ok) return null;
+  if (!res.ok) return { reason: 'bad_token' };
   const info = await res.json();
-  if (!info || info.aud !== env.CLIENT_ID) return null;
+  if (!info || info.aud !== env.CLIENT_ID) return { reason: 'bad_token' };
   const email = (info.email || '').toLowerCase();
   const allowed = (env.ALLOWED_EMAILS || '').split(',').map(e => e.trim().toLowerCase()).filter(Boolean);
-  if (!email || allowed.indexOf(email) < 0) return null;
-  if (String(info.email_verified) !== 'true') return null;
-  return email;
+  if (!email || allowed.indexOf(email) < 0) return { reason: 'not_allowed', email: email || undefined };
+  if (String(info.email_verified) !== 'true') return { reason: 'bad_token' };
+  return { email: email };
 }
 
 /* ---------- ops ---------- */
@@ -209,11 +210,11 @@ export default {
     const action = (body.action || '').toString();
 
     if (action === 'authToken') {
-      const email = await verifyGoogleToken(env, body.credential || body.id_token || '');
-      if (!email) return json({ ok: false, error: 'auth' }, origin);
+      const v = await verifyGoogleToken(env, body.credential || body.id_token || '');
+      if (!v.email) return json({ ok: false, error: v.reason === 'not_allowed' ? 'not_allowed' : 'auth' }, origin);
       const token = crypto.randomUUID() + crypto.randomUUID();
-      await env.KV.put('s_' + token, email, { expirationTtl: SESSION_TTL_SEC });
-      return json({ ok: true, session: token, ttl: SESSION_TTL_SEC, email: email }, origin);
+      await env.KV.put('s_' + token, v.email, { expirationTtl: SESSION_TTL_SEC });
+      return json({ ok: true, session: token, ttl: SESSION_TTL_SEC, email: v.email }, origin);
     }
 
     if (action === 'authLogout') {
@@ -238,6 +239,10 @@ export default {
     const email = await sessionEmail(env, body.session);
     if (!email) return json({ ok: false, error: 'auth' }, origin);
     const data = await getData(env);
+    if (action === 'list') {
+      const logs = data.logs.slice(-MAX_LOG_ROWS).reverse(); // newest first
+      return json({ ok: true, email: email, data: { ...data, logs, ts: nowIso() } }, origin);
+    }
     let result;
     if (action === 'setPriority') result = applyOp(data, { op: 'setPriority', id: body.id, priority: body.priority });
     else if (action === 'resolveTask') result = applyOp(data, { op: 'resolveTask', id: body.id });
