@@ -95,6 +95,18 @@
   function safeLink(url) { return /^https?:\/\//i.test(String(url || '')) ? esc(url) : '#'; }
   function linkHtml(links) { return (links || []).map(function(l){return '<a target="_blank" rel="noopener noreferrer" href="'+safeLink(l.url)+'">'+esc(l.label || l.name || l.url)+'</a>';}).join(' · '); }
   function fullTime(iso) { return iso ? esc(new Date(iso).toLocaleString()) : 'Not yet'; }
+  function resultHtml(result) {
+    if(!result || (!result.url && !result.summary)) return '';
+    return '<div class="result-box"><strong>Result</strong><p>'+esc(result.summary || '')+'</p>'+(result.url?'<a href="'+safeLink(result.url)+'" target="_blank" rel="noopener noreferrer">'+esc(result.url)+'</a>':'')+'</div>';
+  }
+  function galleryHtml(images) {
+    if(!images.length) return '<p class="empty">No images shared yet.</p>';
+    return '<div class="image-gallery">'+images.map(function(i){
+      var valid=/^https:\/\//i.test(i.src) || /^data:image\/(jpeg|png|webp);base64,/.test(i.src);
+      if(!valid) return '';
+      return '<figure><a href="'+esc(i.src)+'" target="_blank" rel="noopener noreferrer"><img loading="lazy" src="'+esc(i.src)+'" alt="'+esc(i.caption || 'Shared image')+'"></a><figcaption>'+esc(i.caption || '')+'<small>'+fullTime(i.added_at)+'</small></figcaption></figure>';
+    }).join('')+'</div>';
+  }
   function renderProjectSummary() {
     var box = $('project-summary');
     if (!box) { box = document.createElement('div'); box.id='project-summary'; $('project-title').after(box); }
@@ -105,8 +117,10 @@
       var active=tasks.filter(function(t){return t.status==='in_progress';}).length;
       var blocked=tasks.filter(function(t){return t.status==='blocked';}).length;
       var percent=tasks.length ? Math.round(done/tasks.length*100) : 0;
-      return '<div class="project-summary"><strong>'+esc(p.name)+'</strong><span>'+done+' of '+tasks.length+' done · '+active+' active · '+blocked+' blocked · '+percent+'%</span><progress max="100" value="'+percent+'"></progress>'+(p.details ? '<p>'+esc(p.details)+'</p>' : '')+(p.status_text ? '<p>'+esc(p.status_text)+'</p>':'')+linkHtml(p.links)+'</div>';
+      return '<div class="project-summary"><strong>'+esc(p.name)+'</strong><span>'+done+' of '+tasks.length+' done · '+active+' active · '+blocked+' blocked · '+percent+'%</span><progress max="100" value="'+percent+'"></progress>'+(p.details ? '<p>'+esc(p.details)+'</p>' : '')+(p.status_text ? '<p>'+esc(p.status_text)+'</p>':'')+linkHtml(p.links)+resultHtml(p.result)+'</div>';
     }).join('');
+    var gallery=$('project-gallery'); if(!gallery) {gallery=document.createElement('section');gallery.id='project-gallery';$('files-section').before(gallery);}
+    gallery.innerHTML='<h3>Project gallery</h3>'+galleryHtml((state.data.images || []).filter(function(i){return state.project==='all' || i.project_id===state.project;}));
   }
   function taskHtml(t) {
     var resolved=t.status==='resolved';
@@ -126,13 +140,14 @@
       '<div class="task-head"><div class="task-title">'+esc(t.title)+'<span class="proj-tag">'+esc(projectName(t.project_id))+'</span></div><span class="badge '+esc(t.priority || 'normal')+'">'+esc(t.priority || 'normal')+'</span><span class="status-pill">'+esc(t.status)+'</span></div>'+
       '<div class="task-meta">Owner: '+esc(owner)+' · '+progress+'% complete · Updated '+fullTime(t.updated_at)+'</div>'+
       (t.status_text?'<p class="status-text">'+esc(t.status_text)+'</p>':'')+
-      '<progress max="100" value="'+Number(progress)+'"></progress>'+
+      '<progress max="100" value="'+Number(progress)+'"></progress>'+resultHtml(t.result)+
       '<details class="task-detail"'+(state.expanded[t.id]?' open':'')+'><summary>Task details, notes and timeline</summary>'+
       '<dl><dt>ID</dt><dd>'+esc(t.id)+'</dd><dt>Created</dt><dd>'+fullTime(t.created_at)+'</dd><dt>Started</dt><dd>'+fullTime(t.started_at)+'</dd><dt>Resolved</dt><dd>'+fullTime(t.resolved_at)+'</dd><dt>Age</dt><dd class="elapsed" data-from="'+esc(t.created_at)+'" data-to="'+esc(t.resolved_at || '')+'"></dd><dt>Elapsed since start (includes pauses)</dt><dd>'+(t.started_at?'<span class="elapsed" data-from="'+esc(t.started_at)+'" data-to="'+esc(t.resolved_at || '')+'"></span>':'Not started')+'</dd><dt>Estimate</dt><dd>'+(t.estimated_minutes?esc(t.estimated_minutes)+' min':'Not set')+'</dd></dl>'+
       '<h4>Details</h4><p class="prewrap">'+esc(t.details || 'No extra details yet.')+'</p>'+
       '<h4>Notes</h4>'+(notes?'<ol class="timeline">'+notes+'</ol>':'<p class="prewrap">'+esc(t.notes || 'No notes yet.')+'</p>')+
       '<h4>Links and files</h4>'+(linked.length?linkHtml(linked):'<p>None yet.</p>')+
       '<h4>Sub-steps</h4>'+(sub?'<ul>'+sub+'</ul>':'<p>No sub-steps yet.</p>')+
+      '<h4>Images and screenshots</h4>'+galleryHtml((state.data.images || []).filter(function(i){return i.task_id===t.id;}))+
       '<h4>Decisions &amp; reasoning</h4>'+(reasoning?'<ol class="timeline">'+reasoning+'</ol>':'<p>No decision summaries yet.</p>')+
       '<h4>History</h4>'+(timeline?'<ol class="timeline">'+timeline+'</ol>':'<p>No recorded history before detailed tracking was enabled.</p>')+
       '</details><div class="task-actions"><button class="btn '+(resolved?'reopen':'resolve')+'" data-act="'+(resolved?'reopen':'resolve')+'">'+(resolved?'Reopen':'Resolve')+'</button><select class="prio" data-act="prio">'+opts+'</select><input class="note-input" placeholder="Add a timestamped note" data-act="note"><button class="btn ghost" data-act="addnote">Add</button></div></div>';
