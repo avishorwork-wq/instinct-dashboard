@@ -146,11 +146,27 @@
   }
 
   async function refresh() {
-    var r = await DashAuth.call('list');
-    if (!r || !r.ok) { if (r && r.error === 'auth') showGate(); return; }
+    var eb = $('app-error');
+    var r;
+    try {
+      r = await DashAuth.call('list');
+    } catch (e) {
+      if (eb) { eb.hidden = false; eb.textContent = 'Could not load data (' + (e && e.message || 'network') + '). Retrying in the background...'; }
+      return;
+    }
+    if (!r || !r.ok) {
+      if (r && r.error === 'auth') { showGate(); return; }
+      if (eb) { eb.hidden = false; eb.textContent = 'Could not load data (' + ((r && r.error) || 'network') + '). Retrying in the background...'; }
+      return;
+    }
+    if (eb) eb.hidden = true;
     state.data = r.data;
-    render();
-    tick();
+    try {
+      render();
+      tick();
+    } catch (e) {
+      if (eb) { eb.hidden = false; eb.textContent = 'Display error (' + (e && e.message || 'error') + '). Try reloading the page.'; }
+    }
   }
 
   /* ---------- gate / boot ---------- */
