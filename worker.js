@@ -127,6 +127,15 @@ function applyOpRaw(data, op) {
   const name = (op && op.op) || '';
   const ts = nowIso();
 
+  if(name==='replyNote') {
+    const target=op.task_id ? data.tasks.find(t=>t.id===op.task_id) : data.projects.find(p=>p.id===op.project_id);
+    const note=target && (target.note_history || []).find(n=>n.id===op.note_id);
+    if(!note) return {ok:false,error:'not_found'};
+    const image=String(op.image || '');
+    if(image && (!/^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+$/.test(image) || image.length>110000)) return {ok:false,error:'image_too_large_or_invalid'};
+    note.replies=note.replies || []; note.replies.push({ts,author:'Instinct',text:String(op.text || ''),image});note.state=op.keep_open?'open':'answered';note.answered_at=ts;target.updated_at=ts;
+    data.logs.push({ts,task_id:op.task_id || '',project_id:op.project_id || target.project_id,level:'info',message:'Instinct replied: '+String(op.text || '')});return {ok:true,op:name};
+  }
   if (name === 'addImage') {
     const t = data.tasks.find(t => t.id === op.task_id);
     const project = data.projects.find(p => p.id === (op.project_id || (t && t.project_id)));
@@ -313,15 +322,15 @@ const handler = {
       return json({ ok: true }, origin);
     }
 
-    if (action === 'listNotes') {
+    if (action === 'listNotes' || action === 'getOpenCount') {
       if (!env.API_KEY || body.apiKey !== env.API_KEY) return json({ok:false,error:'auth'},origin);
       const data=await getData(env), since=body.since || '';
       const notes=[];
       for(const type of ['tasks','projects']) for(const item of data[type]) for(const note of item.note_history || []) {
-        if(note.ts > since && (!body.author || note.author === body.author)) notes.push({...note,type:type==='tasks'?'task':'project',id:item.id,title:item.title || item.name,project_id:item.project_id || item.id});
+        if(note.ts > since && (!body.author || note.author === body.author) && (!body.onlyOpen || note.state==='open')) notes.push({...note,type:type==='tasks'?'task':'project',id:item.id,title:item.title || item.name,project_id:item.project_id || item.id});
       }
       notes.sort((a,b)=>a.ts.localeCompare(b.ts));
-      return json({ok:true,notes,ts:nowIso()},origin);
+      return json(action==='getOpenCount'?{ok:true,openCount:notes.filter(n=>n.state==='open').length,lastNoteAt:notes.length?notes[notes.length-1].ts:null}:{ok:true,notes,ts:nowIso()},origin);
     }
     // Agent API: secret-key writes.
     if (action === 'apiUpdate') {
@@ -343,6 +352,17 @@ const handler = {
     if (action === 'list') {
       const logs = data.logs.slice(-MAX_LOG_ROWS).reverse(); // newest first
       return json({ ok: true, email: email, v: await getVersion(env), data: { ...data, logs, ts: nowIso() } }, origin);
+    }
+    if(action==='addRequest') {
+      const target=body.project_id ? data.projects.find(p=>p.id===body.project_id) : data.tasks.find(t=>t.id===body.task_id);
+      if(!target) return json({ok:false,error:'not_found'},origin);
+      const image=String(body.image || '');
+      if(image && (!/^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+$/.test(image) || image.length>110000)) return json({ok:false,error:'image_too_large_or_invalid'},origin);
+      if(!String(body.text || '').trim() && !image) return json({ok:false,error:'empty_note'},origin);
+      const ts=nowIso();const note={id:crypto.randomUUID(),ts,author:'Avi',text:String(body.text || ''),image,state:'open',replies:[]};
+      target.note_history=target.note_history || [];target.note_history.push(note);target.updated_at=ts;
+      data.logs.push({ts,project_id:body.project_id || target.project_id,task_id:body.task_id || '',level:'info',message:'Open request from Avi: '+note.text});
+      await putData(env,data);return json({ok:true,note_id:note.id},origin);
     }
     let result;
     if (action === 'setPriority') result = applyOp(data, { op: 'setPriority', id: body.id, priority: body.priority });
