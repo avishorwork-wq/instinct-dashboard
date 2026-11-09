@@ -88,9 +88,54 @@ async function verifyGoogleToken(env, idToken) {
 /* ---------- ops ---------- */
 
 function applyOp(data, op) {
+  const ts = nowIso();
+  const before = data.tasks.find(t => t.id === op.id);
+  const old = before ? JSON.parse(JSON.stringify(before)) : null;
+  const result = applyOpRaw(data, op);
+  if (!result.ok) return result;
+  const t = data.tasks.find(t => t.id === op.id);
+  if (t && ['upsertTask','setPriority','resolveTask','reopenTask','note'].includes(op.op)) {
+    if (op.op === 'upsertTask') {
+      for (const key of ['owner','details','status_text','project_id','started_at','resolved_at','created_at','links','substeps','estimated_minutes']) {
+        if (op[key] !== undefined) t[key] = op[key];
+      }
+      if (op.progress !== undefined) t.progress = Math.max(0, Math.min(100, Number(op.progress) || 0));
+      if (op.notes !== undefined && (!old || old.notes !== op.notes)) {
+        t.note_history = t.note_history || [];
+        t.note_history.push({ts,text:String(op.notes),author:op.author || 'Instinct'});
+      }
+    }
+    if (t.status === 'resolved') t.progress = 100;
+    t.history = t.history || [];
+    const changes = {};
+    for (const key of ['title','status','priority','owner','details','status_text','progress','notes','links','substeps']) {
+      if (JSON.stringify(old && old[key]) !== JSON.stringify(t[key])) changes[key] = {from:old ? old[key] : null,to:t[key]};
+    }
+    t.history.push({ts,action:op.op,actor:op.author || 'Instinct',changes});
+    t.updated_at = ts;
+    data.logs.push({ts,project_id:t.project_id,task_id:t.id,level:t.status === 'resolved' ? 'done' : 'info',message:t.title + ': ' + (op.status_text || (op.op === 'note' ? 'note added' : Object.keys(changes).join(', ') + ' updated'))});
+    if (data.logs.length > MAX_LOG_ROWS) data.logs = data.logs.slice(-MAX_LOG_ROWS);
+  }
+  if (op.op === 'upsertProject') {
+    const p = data.projects.find(p => p.id === op.id);
+    for (const key of ['details','owner','links','status_text']) if (op[key] !== undefined) p[key] = op[key];
+  }
+  return result;
+}
+
+function applyOpRaw(data, op) {
   const name = (op && op.op) || '';
   const ts = nowIso();
 
+  if (name === 'reasoning') {
+    const t = data.tasks.find(t => t.id === (op.task_id || op.id));
+    if (!t || !op.decision || !op.why) return {ok:false,error:t ? 'missing_fields' : 'not_found'};
+    const entry = {ts,decision:String(op.decision),why:String(op.why),author:op.author || 'Instinct'};
+    for (const key of ['alternatives','assumptions','open_questions','outcome']) if (op[key] !== undefined) entry[key] = op[key];
+    t.reasoning = t.reasoning || []; t.reasoning.push(entry); t.updated_at = ts;
+    data.logs.push({ts,task_id:t.id,project_id:t.project_id,level:'info',message:'Decision: '+entry.decision+' - '+entry.why});
+    return {ok:true,op:name,id:t.id};
+  }
   if (name === 'deleteProject') { data.projects = data.projects.filter(p => p.id !== op.id); return {ok:true,op:name}; }
   if (name === 'deleteTask') { data.tasks = data.tasks.filter(t => t.id !== op.id); return {ok:true,op:name}; }
   if (name === 'deleteTestLog') { data.logs = data.logs.filter(l => l.message !== op.message); return {ok:true,op:name}; }
@@ -108,7 +153,7 @@ function applyOp(data, op) {
   }
 
   if (name === 'upsertTask') {
-    if (!op.id || !op.title) return { ok: false, error: 'missing_fields' };
+    if (!op.id || (!op.title && !data.tasks.some(t => t.id === op.id))) return { ok: false, error: 'missing_fields' };
     const ext = data.tasks.find(t => String(t.id) === String(op.id));
     if (ext) {
       if (op.title) ext.title = String(op.title);
@@ -150,6 +195,8 @@ function applyOp(data, op) {
     const t = data.tasks.find(t => String(t.id) === String(op.id));
     if (!t) return { ok: false, error: 'not_found' };
     t.notes = String(op.notes || '');
+    t.note_history = t.note_history || [];
+    t.note_history.push({ts, text:t.notes, author:op.author || 'Avi'});
     t.updated_at = ts;
     return { ok: true, op: name, id: op.id };
   }
