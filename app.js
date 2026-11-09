@@ -1,6 +1,6 @@
 /* Dashboard UI logic. */
 (function () {
-  var state = { data: null, project: 'all', pollTimer: null, tickTimer: null, v: null };
+  var state = { data: null, project: 'all', pollTimer: null, tickTimer: null, v: null, expanded: {} };
   var VER_MS = 2500; // cheap version poll; full data only loads when the version changes
 
   function $(id) { return document.getElementById(id); }
@@ -71,6 +71,7 @@
     $('project-title').textContent = state.project === 'all' ? 'All projects' : projectName(state.project);
     $('tasks').innerHTML = sel.length ? sel.map(taskHtml).join('') : '<div class="empty">No tasks here yet.</div>';
     bindTaskActions();
+    renderProjectSummary();
 
     // Files
     var files = d.files || [];
@@ -82,7 +83,7 @@
     // Logs
     var logs = d.logs || [];
     if (state.project !== 'all') logs = logs.filter(function (l) { return String(l.project_id) === state.project; });
-    $('logs').innerHTML = logs.length ? logs.slice(0, 100).map(function (l) {
+    $('logs').innerHTML = logs.length ? logs.slice(0, 500).map(function (l) {
       return '<div class="log-row"><span class="ts">' + esc(fmtWhen(l.ts)) + '</span>' +
         '<span class="lvl ' + esc(l.level || 'info') + '">' + esc(l.level || 'info') + '</span>' +
         '<span class="msg">' + esc(l.message) + '</span></div>';
@@ -91,29 +92,50 @@
     $('last-sync').textContent = 'Updated ' + fmtWhen(d.ts);
   }
 
-  function taskHtml(t) {
-    var resolved = t.status === 'resolved';
-    var opts = ['low', 'normal', 'high', 'urgent'].map(function (p) {
-      return '<option value="' + p + '"' + (t.priority === p ? ' selected' : '') + '>' + p + '</option>';
+  function safeLink(url) { return /^https?:\/\//i.test(String(url || '')) ? esc(url) : '#'; }
+  function linkHtml(links) { return (links || []).map(function(l){return '<a target="_blank" rel="noopener noreferrer" href="'+safeLink(l.url)+'">'+esc(l.label || l.name || l.url)+'</a>';}).join(' · '); }
+  function fullTime(iso) { return iso ? esc(new Date(iso).toLocaleString()) : 'Not yet'; }
+  function renderProjectSummary() {
+    var box = $('project-summary');
+    if (!box) { box = document.createElement('div'); box.id='project-summary'; $('project-title').after(box); }
+    var projects = state.project === 'all' ? state.data.projects : state.data.projects.filter(function(p){return p.id === state.project;});
+    box.innerHTML = projects.map(function(p){
+      var tasks=state.data.tasks.filter(function(t){return t.project_id===p.id;});
+      var done=tasks.filter(function(t){return t.status==='resolved';}).length;
+      var active=tasks.filter(function(t){return t.status==='in_progress';}).length;
+      var blocked=tasks.filter(function(t){return t.status==='blocked';}).length;
+      var percent=tasks.length ? Math.round(done/tasks.length*100) : 0;
+      return '<div class="project-summary"><strong>'+esc(p.name)+'</strong><span>'+done+' of '+tasks.length+' done · '+active+' active · '+blocked+' blocked · '+percent+'%</span><progress max="100" value="'+percent+'"></progress>'+(p.details ? '<p>'+esc(p.details)+'</p>' : '')+(p.status_text ? '<p>'+esc(p.status_text)+'</p>':'')+linkHtml(p.links)+'</div>';
     }).join('');
-    return '<div class="task' + (resolved ? ' resolved' : '') + '" data-id="' + esc(t.id) + '">' +
-      '<div class="task-head">' +
-        '<div class="task-title">' + esc(t.title) +
-          (state.project === 'all' && t.project_id ? '<span class="proj-tag">' + esc(projectName(t.project_id)) + '</span>' : '') +
-        '</div>' +
-        '<span class="badge ' + esc(resolved ? 'resolved' : (t.priority || 'normal')) + '">' + esc(resolved ? 'resolved' : (t.priority || 'normal')) + '</span>' +
-        '<span class="elapsed" data-from="' + esc(t.created_at) + '"' + (resolved ? ' data-to="' + esc(t.resolved_at) + '"' : '') + '></span>' +
-      '</div>' +
-      (t.notes ? '<div class="task-notes">' + esc(t.notes) + '</div>' : '') +
-      '<div class="task-actions">' +
-        (resolved
-          ? '<button class="btn reopen" data-act="reopen">Reopen</button>'
-          : '<button class="btn resolve" data-act="resolve">Resolve</button>') +
-        '<select class="prio" data-act="prio">' + opts + '</select>' +
-        '<input class="note-input" placeholder="Add a note" data-act="note">' +
-        '<button class="btn ghost" data-act="addnote">Add</button>' +
-      '</div>' +
-    '</div>';
+  }
+  function taskHtml(t) {
+    var resolved=t.status==='resolved';
+    var owner=t.owner || ((t.notes || '').match(/^Owner: ([^\n]+)/) || [null,'Not assigned'])[1];
+    var progress=t.progress !== undefined ? t.progress : (resolved ? 100 : 0);
+    var opts=['low','normal','high','urgent'].map(function(p){return '<option value="'+p+'"'+(t.priority===p?' selected':'')+'>'+p+'</option>';}).join('');
+    var timeline=(t.history || []).slice().reverse().map(function(h){
+      return '<li><time>'+fullTime(h.ts)+'</time> <strong>'+esc(h.actor || 'Instinct')+'</strong> '+esc(h.action)+'<ul>'+Object.keys(h.changes || {}).map(function(k){var c=h.changes[k];return '<li>'+esc(k)+': '+esc(typeof c.to==='object'?JSON.stringify(c.to):c.to)+'</li>';}).join('')+'</ul></li>';
+    }).join('');
+    var notes=(t.note_history || []).slice().reverse().map(function(n){return '<li><time>'+fullTime(n.ts)+'</time> '+esc(n.author || '')+'<p>'+esc(n.text)+'</p></li>';}).join('');
+    var sub=(t.substeps || []).map(function(x){return '<li>'+esc(x.status || (x.done?'resolved':'open'))+' · '+esc(x.title || x.text || '')+(x.details?'<p>'+esc(x.details)+'</p>':'')+'</li>';}).join('');
+    var reasoning=(t.reasoning || []).slice().reverse().map(function(r){
+      return '<li><time>'+fullTime(r.ts)+'</time><p><strong>'+esc(r.decision)+'</strong></p><p>Why: '+esc(r.why)+'</p>'+['alternatives','assumptions','open_questions','outcome'].filter(function(k){return r[k]!==undefined;}).map(function(k){return '<p>'+esc(k.replace(/_/g,' '))+': '+esc(Array.isArray(r[k])?r[k].join('; '):r[k])+'</p>';}).join('')+'</li>';
+    }).join('');
+    var linked=(t.links || []).concat((state.data.files || []).filter(function(f){return f.task_id===t.id;}));
+    return '<div class="task'+(resolved?' resolved':'')+'" data-id="'+esc(t.id)+'">'+
+      '<div class="task-head"><div class="task-title">'+esc(t.title)+'<span class="proj-tag">'+esc(projectName(t.project_id))+'</span></div><span class="badge '+esc(t.priority || 'normal')+'">'+esc(t.priority || 'normal')+'</span><span class="status-pill">'+esc(t.status)+'</span></div>'+
+      '<div class="task-meta">Owner: '+esc(owner)+' · '+progress+'% complete · Updated '+fullTime(t.updated_at)+'</div>'+
+      (t.status_text?'<p class="status-text">'+esc(t.status_text)+'</p>':'')+
+      '<progress max="100" value="'+Number(progress)+'"></progress>'+
+      '<details class="task-detail"'+(state.expanded[t.id]?' open':'')+'><summary>Task details, notes and timeline</summary>'+
+      '<dl><dt>ID</dt><dd>'+esc(t.id)+'</dd><dt>Created</dt><dd>'+fullTime(t.created_at)+'</dd><dt>Started</dt><dd>'+fullTime(t.started_at)+'</dd><dt>Resolved</dt><dd>'+fullTime(t.resolved_at)+'</dd><dt>Age</dt><dd class="elapsed" data-from="'+esc(t.created_at)+'" data-to="'+esc(t.resolved_at || '')+'"></dd><dt>Elapsed since start (includes pauses)</dt><dd>'+(t.started_at?'<span class="elapsed" data-from="'+esc(t.started_at)+'" data-to="'+esc(t.resolved_at || '')+'"></span>':'Not started')+'</dd><dt>Estimate</dt><dd>'+(t.estimated_minutes?esc(t.estimated_minutes)+' min':'Not set')+'</dd></dl>'+
+      '<h4>Details</h4><p class="prewrap">'+esc(t.details || 'No extra details yet.')+'</p>'+
+      '<h4>Notes</h4>'+(notes?'<ol class="timeline">'+notes+'</ol>':'<p class="prewrap">'+esc(t.notes || 'No notes yet.')+'</p>')+
+      '<h4>Links and files</h4>'+(linked.length?linkHtml(linked):'<p>None yet.</p>')+
+      '<h4>Sub-steps</h4>'+(sub?'<ul>'+sub+'</ul>':'<p>No sub-steps yet.</p>')+
+      '<h4>Decisions &amp; reasoning</h4>'+(reasoning?'<ol class="timeline">'+reasoning+'</ol>':'<p>No decision summaries yet.</p>')+
+      '<h4>History</h4>'+(timeline?'<ol class="timeline">'+timeline+'</ol>':'<p>No recorded history before detailed tracking was enabled.</p>')+
+      '</details><div class="task-actions"><button class="btn '+(resolved?'reopen':'resolve')+'" data-act="'+(resolved?'reopen':'resolve')+'">'+(resolved?'Reopen':'Resolve')+'</button><select class="prio" data-act="prio">'+opts+'</select><input class="note-input" placeholder="Add a timestamped note" data-act="note"><button class="btn ghost" data-act="addnote">Add</button></div></div>';
   }
 
   function tick() {
@@ -125,6 +147,7 @@
   function bindTaskActions() {
     Array.prototype.forEach.call(document.querySelectorAll('.task'), function (card) {
       var id = card.getAttribute('data-id');
+      var detail=card.querySelector('details'); if(detail) detail.ontoggle=function(){state.expanded[id]=detail.open;};
       var noteInput = card.querySelector('input[data-act="note"]');
       Array.prototype.forEach.call(card.querySelectorAll('[data-act]'), function (el) {
         var act = el.getAttribute('data-act');
