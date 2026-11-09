@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Instinct Dashboard</title>
+<link rel="stylesheet" href="styles.css">
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<script src="config.js"></script>
+<script src="auth_client.js"></script>
+<script src="app.js" defer></script>
+</head>
+<body>
+<div id="gate" class="gate">
+  <div class="gate-card">
+    <h1>Instinct Dashboard</h1>
+    <p class="muted">Private. Sign in with the authorized Google account.</p>
+    <div id="signin-btn"></div>
+    <p id="gate-error" class="error" hidden></p>
+  </div>
+</div>
+
+<div id="app" hidden>
+  <header class="topbar">
+    <div class="brand">Instinct Dashboard</div>
+    <div class="top-right">
+      <span id="last-sync" class="muted small"></span>
+      <span id="who" class="muted small"></span>
+      <button id="signout" class="btn ghost">Sign out</button>
+    </div>
+  </header>
+  <div class="layout">
+    <nav id="projects" class="sidebar"></nav>
+    <main class="main">
+      <section id="tasks-section">
+        <h2 id="project-title">All projects</h2>
+        <div id="tasks"></div>
+      </section>
+      <section id="files-section">
+        <h3>Files</h3>
+        <div id="files"></div>
+      </section>
+      <section id="logs-section">
+        <h3>Activity log</h3>
+        <div id="logs"></div>
+      </section>
+    </main>
+  </div>
+</div>
+</body>
+</html>
