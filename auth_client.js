@@ -39,10 +39,20 @@
       var attempts = 0;
       function waitForGoogle() {
         if (window.google && google.accounts && google.accounts.id) { render(); return; }
-        if (++attempts > 60) { onError(new Error('google_lib_missing')); return; }
+        attempts++;
+        if (attempts === 20) {
+          var p = document.createElement('p');
+          p.className = 'muted small';
+          p.id = 'signin-loading';
+          p.textContent = 'Loading Google sign-in, this can take a moment...';
+          el.appendChild(p);
+        }
+        if (attempts > 240) { onError(new Error('google_lib_missing')); return; }
         setTimeout(waitForGoogle, 500);
       }
       function render() {
+      var loading = document.getElementById('signin-loading');
+      if (loading) loading.remove();
       google.accounts.id.initialize({
         client_id: cfg.googleClientId,
         callback: async function (resp) {
