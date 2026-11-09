@@ -53,7 +53,9 @@ function nowIso() {
 
 async function getData(env) {
   const d = await env.KV.get('data', 'json');
-  return d || { projects: [], tasks: [], logs: [], files: [] };
+  const data=d || { projects: [], tasks: [], logs: [], files: [] };
+  for(const kind of ['tasks','projects']) for(const item of data[kind]) for(const note of item.note_history || []) if(note.author==='Avi') {note.id=note.id || ('note-'+item.id+'-'+note.ts);note.state=note.state || 'open';note.replies=note.replies || [];}
+  return data;
 }
 
 async function getVersion(env) {
@@ -284,7 +286,7 @@ const handler = {
     if (request.method === 'GET') {
       const action = url.searchParams.get('action') || '';
       if (action === 'ping') {
-        return json({ ok: true, service: 'instinct-dashboard', ts: nowIso() }, origin);
+        return json({ ok: true, service: 'instinct-dashboard', build:'notes-v9', ts: nowIso() }, origin);
       }
       if (action === 'version') {
         return json({ ok: true, v: await getVersion(env) }, origin);
@@ -327,7 +329,7 @@ const handler = {
       const data=await getData(env), since=body.since || '';
       const notes=[];
       for(const type of ['tasks','projects']) for(const item of data[type]) for(const note of item.note_history || []) {
-        if(note.ts > since && (!body.author || note.author === body.author) && (!body.onlyOpen || note.state==='open')) notes.push({...note,type:type==='tasks'?'task':'project',id:item.id,title:item.title || item.name,project_id:item.project_id || item.id});
+        if(note.ts > since && (!body.author || note.author === body.author) && (!body.onlyOpen || note.state==='open')) notes.push({...note,note_id:note.id,item_id:item.id,task_id:type==='tasks'?item.id:undefined,type:type==='tasks'?'task':'project',title:item.title || item.name,project_id:item.project_id || item.id});
       }
       notes.sort((a,b)=>a.ts.localeCompare(b.ts));
       return json(action==='getOpenCount'?{ok:true,openCount:notes.filter(n=>n.state==='open').length,lastNoteAt:notes.length?notes[notes.length-1].ts:null}:{ok:true,notes,ts:nowIso()},origin);
@@ -382,7 +384,7 @@ const handler = {
 
 // One strongly consistent SQLite-backed object. Sessions remain in the original
 // KV namespace so existing phone sign-ins keep working.
-export class DashboardState {
+export class DashboardStateV2 {
   constructor(ctx, env) { this.ctx = ctx; this.env = env; }
   async fetch(request) {
     const storage = this.ctx.storage;
@@ -421,6 +423,9 @@ export class DashboardState {
 }
 export default {
   fetch(request, env) {
+    if(new URL(request.url).searchParams.get('action')==='build') return new Response('notes-v9-entry');
     return env.STATE.get(env.STATE.idFromName('dashboard-owner')).fetch(request);
   }
 };
+
+export {DashboardStateV2 as DashboardState};
