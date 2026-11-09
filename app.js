@@ -1,7 +1,7 @@
 /* Dashboard UI logic. */
 (function () {
-  var state = { data: null, project: 'all', pollTimer: null, tickTimer: null };
-  var POLL_MS = 60000;
+  var state = { data: null, project: 'all', pollTimer: null, tickTimer: null, v: null };
+  var VER_MS = 2500; // cheap version poll; full data only loads when the version changes
 
   function $(id) { return document.getElementById(id); }
   function esc(s) {
@@ -160,6 +160,7 @@
       return;
     }
     if (eb) eb.hidden = true;
+    if (r.v !== undefined) state.v = r.v;
     state.data = r.data;
     try {
       render();
@@ -185,13 +186,26 @@
     });
   }
 
+  /* Lightweight change detector: one tiny GET every few seconds while the tab
+     is visible; full data loads only when the server's version counter moves. */
+  async function checkVersion(force) {
+    if (!DashAuth.isSignedIn()) return;
+    if (!force && document.visibilityState !== 'visible') return;
+    try {
+      var r = await fetch((window.DASH_CONFIG || {}).endpoint + '?action=version').then(function (x) { return x.json(); });
+      if (!r || r.v === undefined) return;
+      if (state.v === null) { await refresh(); return; }
+      if (force || r.v !== state.v || !state.data) await refresh();
+    } catch (e) { /* offline or sleeping - next tick retries */ }
+  }
+
   function enter() {
     $('gate').style.display = 'none';
     $('app').hidden = false;
     $('who').textContent = DashAuth.email() || '';
     refresh();
     clearInterval(state.pollTimer);
-    state.pollTimer = setInterval(refresh, POLL_MS);
+    state.pollTimer = setInterval(checkVersion, VER_MS);
     clearInterval(state.tickTimer);
     state.tickTimer = setInterval(tick, 1000);
   }
@@ -204,6 +218,11 @@
       err.textContent = 'Dashboard backend is not connected yet. Check back soon.';
       return;
     }
+    window.addEventListener('online', function () { checkVersion(true); });
+    window.addEventListener('pageshow', function () { checkVersion(true); });
+    document.addEventListener('visibilitychange', function () {
+      if (document.visibilityState === 'visible') checkVersion(true);
+    });
     if (DashAuth.isSignedIn()) enter(); else showGate();
   });
 })();
