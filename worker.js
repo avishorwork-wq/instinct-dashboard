@@ -136,6 +136,14 @@ function applyOpRaw(data, op) {
     data.logs.push({ts,task_id:t.id,project_id:t.project_id,level:'info',message:'Decision: '+entry.decision+' - '+entry.why});
     return {ok:true,op:name,id:t.id};
   }
+  if (name === 'deleteProjectCascade') {
+    const ids = new Set(data.tasks.filter(t => t.project_id === op.id).map(t => t.id));
+    data.projects = data.projects.filter(p => p.id !== op.id);
+    data.tasks = data.tasks.filter(t => t.project_id !== op.id);
+    data.logs = data.logs.filter(l => l.project_id !== op.id && !ids.has(l.task_id));
+    data.files = data.files.filter(f => f.project_id !== op.id && !ids.has(f.task_id));
+    return {ok:true,op:name,id:op.id};
+  }
   if (name === 'deleteProject') { data.projects = data.projects.filter(p => p.id !== op.id); return {ok:true,op:name}; }
   if (name === 'deleteTask') { data.tasks = data.tasks.filter(t => t.id !== op.id); return {ok:true,op:name}; }
   if (name === 'deleteTestLog') { data.logs = data.logs.filter(l => l.message !== op.message); return {ok:true,op:name}; }
@@ -319,6 +327,16 @@ export class DashboardState {
   constructor(ctx, env) { this.ctx = ctx; this.env = env; }
   async fetch(request) {
     const storage = this.ctx.storage;
+    const url = new URL(request.url);
+    if (url.searchParams.get('action') === 'watch') {
+      const email = await sessionEmail(this.env, url.searchParams.get('session'));
+      if (!email) return new Response('Unauthorized', {status:401});
+      if ((request.headers.get('Upgrade') || '').toLowerCase() !== 'websocket') return new Response('WebSocket required',{status:426});
+      const pair = new WebSocketPair();
+      this.ctx.acceptWebSocket(pair[1]);
+      pair[1].send(JSON.stringify({v:await storage.get('v') || 0}));
+      return new Response(null,{status:101,webSocket:pair[0]});
+    }
     const oldKV = this.env.KV;
     const adapter = {
       get: async (key, type) => {
@@ -328,12 +346,18 @@ export class DashboardState {
       },
       put: async (key, value, opts) => {
         if (key !== 'data' && key !== 'v') return oldKV.put(key, value, opts);
-        return storage.put(key, value);
+        await storage.put(key, value);
+        if (key === 'v') for (const socket of this.ctx.getWebSockets()) {
+          try { socket.send(JSON.stringify({v:Number(value)})); } catch (_) { }
+        }
       },
       delete: async (key) => oldKV.delete(key)
     };
     return handler.fetch(request, { ...this.env, KV: adapter });
   }
+  webSocketMessage(ws, message) { if (message === 'ping') ws.send('pong'); }
+  webSocketClose(ws, code, reason) { ws.close(code, reason); }
+  webSocketError(ws) { try { ws.close(1011, 'Reconnect'); } catch (_) {} }
 }
 export default {
   fetch(request, env) {
