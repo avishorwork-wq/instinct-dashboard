@@ -56,8 +56,14 @@ async function getData(env) {
   return d || { projects: [], tasks: [], logs: [], files: [] };
 }
 
+async function getVersion(env) {
+  return parseInt(await env.KV.get('v')) || 0;
+}
+
 async function putData(env, data) {
   await env.KV.put('data', JSON.stringify(data));
+  // Bump the change counter so clients polling ?action=version see the write.
+  await env.KV.put('v', String((await getVersion(env)) + 1));
 }
 
 async function sessionEmail(env, token) {
@@ -85,6 +91,9 @@ function applyOp(data, op) {
   const name = (op && op.op) || '';
   const ts = nowIso();
 
+  if (name === 'deleteProject') { data.projects = data.projects.filter(p => p.id !== op.id); return {ok:true,op:name}; }
+  if (name === 'deleteTask') { data.tasks = data.tasks.filter(t => t.id !== op.id); return {ok:true,op:name}; }
+  if (name === 'deleteTestLog') { data.logs = data.logs.filter(l => l.message !== op.message); return {ok:true,op:name}; }
   if (name === 'upsertProject') {
     if (!op.id || !op.name) return { ok: false, error: 'missing_fields' };
     const ex = data.projects.find(p => String(p.id) === String(op.id));
@@ -175,7 +184,7 @@ function writeStatus(t, st, ts) {
 
 /* ---------- entry ---------- */
 
-export default {
+const handler = {
   async fetch(request, env) {
     const url = new URL(request.url);
     const origin = request.headers.get('origin') || '';
@@ -189,12 +198,15 @@ export default {
       if (action === 'ping') {
         return json({ ok: true, service: 'instinct-dashboard', ts: nowIso() }, origin);
       }
+      if (action === 'version') {
+        return json({ ok: true, v: await getVersion(env) }, origin);
+      }
       if (action === 'list') {
         const email = await sessionEmail(env, url.searchParams.get('session') || '');
         if (!email) return json({ ok: false, error: 'auth' }, origin);
         const data = await getData(env);
         const logs = data.logs.slice(-MAX_LOG_ROWS).reverse(); // newest first
-        return json({ ok: true, email: email, data: { ...data, logs, ts: nowIso() } }, origin);
+        return json({ ok: true, email: email, v: await getVersion(env), data: { ...data, logs, ts: nowIso() } }, origin);
       }
       return json({ ok: false, error: 'unknown_action' }, origin);
     }
@@ -211,7 +223,7 @@ export default {
 
     if (action === 'authToken') {
       const v = await verifyGoogleToken(env, body.credential || body.id_token || '');
-      if (!v.email) return json({ ok: false, error: v.reason === 'not_allowed' ? 'not_allowed' : 'auth' }, origin);
+      if (v.reason || !v.email) return json({ ok: false, error: v.reason === 'not_allowed' ? 'not_allowed' : 'auth' }, origin);
       const token = crypto.randomUUID() + crypto.randomUUID();
       await env.KV.put('s_' + token, v.email, { expirationTtl: SESSION_TTL_SEC });
       return json({ ok: true, session: token, ttl: SESSION_TTL_SEC, email: v.email }, origin);
@@ -241,7 +253,7 @@ export default {
     const data = await getData(env);
     if (action === 'list') {
       const logs = data.logs.slice(-MAX_LOG_ROWS).reverse(); // newest first
-      return json({ ok: true, email: email, data: { ...data, logs, ts: nowIso() } }, origin);
+      return json({ ok: true, email: email, v: await getVersion(env), data: { ...data, logs, ts: nowIso() } }, origin);
     }
     let result;
     if (action === 'setPriority') result = applyOp(data, { op: 'setPriority', id: body.id, priority: body.priority });
@@ -251,5 +263,33 @@ export default {
     else return json({ ok: false, error: 'unknown_action' }, origin);
     if (result.ok) await putData(env, data);
     return json(result, origin);
+  }
+};
+
+// One strongly consistent SQLite-backed object. Sessions remain in the original
+// KV namespace so existing phone sign-ins keep working.
+export class DashboardState {
+  constructor(ctx, env) { this.ctx = ctx; this.env = env; }
+  async fetch(request) {
+    const storage = this.ctx.storage;
+    const oldKV = this.env.KV;
+    const adapter = {
+      get: async (key, type) => {
+        if (key !== 'data' && key !== 'v') return oldKV.get(key, type);
+        const value = await storage.get(key);
+        return type === 'json' && value ? JSON.parse(value) : (value || null);
+      },
+      put: async (key, value, opts) => {
+        if (key !== 'data' && key !== 'v') return oldKV.put(key, value, opts);
+        return storage.put(key, value);
+      },
+      delete: async (key) => oldKV.delete(key)
+    };
+    return handler.fetch(request, { ...this.env, KV: adapter });
+  }
+}
+export default {
+  fetch(request, env) {
+    return env.STATE.get(env.STATE.idFromName('dashboard-owner')).fetch(request);
   }
 };
