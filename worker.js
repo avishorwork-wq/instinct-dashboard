@@ -313,6 +313,16 @@ const handler = {
       return json({ ok: true }, origin);
     }
 
+    if (action === 'listNotes') {
+      if (!env.API_KEY || body.apiKey !== env.API_KEY) return json({ok:false,error:'auth'},origin);
+      const data=await getData(env), since=body.since || '';
+      const notes=[];
+      for(const type of ['tasks','projects']) for(const item of data[type]) for(const note of item.note_history || []) {
+        if(note.ts > since && (!body.author || note.author === body.author)) notes.push({...note,type:type==='tasks'?'task':'project',id:item.id,title:item.title || item.name,project_id:item.project_id || item.id});
+      }
+      notes.sort((a,b)=>a.ts.localeCompare(b.ts));
+      return json({ok:true,notes,ts:nowIso()},origin);
+    }
     // Agent API: secret-key writes.
     if (action === 'apiUpdate') {
       if (!env.API_KEY || !body.apiKey || body.apiKey !== env.API_KEY) {
@@ -338,7 +348,12 @@ const handler = {
     if (action === 'setPriority') result = applyOp(data, { op: 'setPriority', id: body.id, priority: body.priority });
     else if (action === 'resolveTask') result = applyOp(data, { op: 'resolveTask', id: body.id });
     else if (action === 'reopenTask') result = applyOp(data, { op: 'reopenTask', id: body.id });
-    else if (action === 'addNote') result = applyOp(data, { op: 'note', id: body.id, notes: body.notes });
+    else if (action === 'addNote') result = applyOp(data, { op: 'note', id: body.id, notes: body.notes, author:'Avi' });
+    else if (action === 'addProjectNote') {
+      const p=data.projects.find(p=>p.id===body.id);
+      if(!p) return json({ok:false,error:'not_found'},origin);
+      const ts=nowIso(); p.note_history=p.note_history || []; p.note_history.push({ts,author:'Avi',text:String(body.notes || '')});p.updated_at=ts;data.logs.push({ts,project_id:p.id,level:'info',message:'Avi added a project note: '+String(body.notes || '')});result={ok:true};
+    }
     else return json({ ok: false, error: 'unknown_action' }, origin);
     if (result.ok) await putData(env, data);
     return json(result, origin);
