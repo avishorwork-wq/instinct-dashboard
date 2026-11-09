@@ -133,3 +133,4 @@ select.prio {
   .proj-item { white-space: nowrap; margin-bottom: 0; }
   .proj-item .count { float: none; margin-left: 6px; }
 }
+.error.banner { margin: 12px 20px 0; padding: 10px 14px; border: 1px solid #7f2d2d; border-radius: 8px; background: #2a1414; }
