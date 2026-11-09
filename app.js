@@ -117,8 +117,9 @@
       var active=tasks.filter(function(t){return t.status==='in_progress';}).length;
       var blocked=tasks.filter(function(t){return t.status==='blocked';}).length;
       var percent=tasks.length ? Math.round(done/tasks.length*100) : 0;
-      return '<div class="project-summary"><strong>'+esc(p.name)+'</strong><span>'+done+' of '+tasks.length+' done · '+active+' active · '+blocked+' blocked · '+percent+'%</span><progress max="100" value="'+percent+'"></progress>'+(p.details ? '<p>'+esc(p.details)+'</p>' : '')+(p.status_text ? '<p>'+esc(p.status_text)+'</p>':'')+linkHtml(p.links)+resultHtml(p.result)+'</div>';
+      return '<div class="project-summary"><strong>'+esc(p.name)+'</strong><span>'+done+' of '+tasks.length+' done · '+active+' active · '+blocked+' blocked · '+percent+'%</span><progress max="100" value="'+percent+'"></progress>'+(p.details ? '<p>'+esc(p.details)+'</p>' : '')+(p.status_text ? '<p>'+esc(p.status_text)+'</p>':'')+linkHtml(p.links)+resultHtml(p.result)+'<div class="project-notes"><h4>Project notes</h4>'+(p.note_history || []).map(function(n){return '<p><small>'+fullTime(n.ts)+' · '+esc(n.author)+'</small><br>'+esc(n.text)+'</p>';}).join('')+'<input class="note-input" id="project-note-'+esc(p.id)+'" placeholder="Add a project note"><button class="btn ghost" data-project-note="'+esc(p.id)+'">Add note</button></div></div>';
     }).join('');
+    Array.from(box.querySelectorAll('[data-project-note]')).forEach(function(b){b.onclick=function(){var input=$('project-note-'+b.dataset.projectNote);if(input.value.trim())doAction('addProjectNote',{id:b.dataset.projectNote,notes:input.value.trim()});};});
     var gallery=$('project-gallery'); if(!gallery) {gallery=document.createElement('section');gallery.id='project-gallery';$('files-section').before(gallery);}
     gallery.innerHTML='<h3>Project gallery</h3>'+galleryHtml((state.data.images || []).filter(function(i){return state.project==='all' || i.project_id===state.project;}));
   }
