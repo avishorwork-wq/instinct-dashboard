@@ -30,6 +30,7 @@
   window.DashAuth = {
     isSignedIn: function () { return !!session; },
     email: function () { return email; },
+    watchUrl: function () { return cfg.endpoint.replace(/^http/, 'ws') + '?action=watch&session=' + encodeURIComponent(session || ''); },
     call: async function (action, payload) {
       var r = await post(Object.assign({ action: action, session: session }, payload || {}));
       if (r && r.error === 'auth') { clearSession(); }
