@@ -1,7 +1,7 @@
 /* Dashboard UI logic. */
 (function () {
   var state = { data: null, project: 'all', pollTimer: null, tickTimer: null, v: null, expanded: {} };
-  var VER_MS = 2500; // cheap version poll; full data only loads when the version changes
+  var VER_MS = 30000; // cheap version poll; full data only loads when the version changes
 
   function $(id) { return document.getElementById(id); }
   function esc(s) {
@@ -196,6 +196,7 @@
   /* ---------- gate / boot ---------- */
 
   function showGate() {
+    if(socket) socket.close(); clearTimeout(reconnectTimer);
     $('app').hidden = true;
     $('gate').style.display = 'flex';
     clearInterval(state.pollTimer); clearInterval(state.tickTimer);
@@ -222,11 +223,25 @@
     } catch (e) { /* offline or sleeping - next tick retries */ }
   }
 
+  var socket=null, reconnectTimer=null, reconnectDelay=1000;
+  function connectLive() {
+    if (!DashAuth.isSignedIn() || document.visibilityState !== 'visible') return;
+    if (socket && (socket.readyState === 0 || socket.readyState === 1)) return;
+    clearTimeout(reconnectTimer);
+    socket = new WebSocket(DashAuth.watchUrl());
+    socket.onopen = function(){ reconnectDelay=1000; checkVersion(true); };
+    socket.onmessage = function(event){
+      try { var msg=JSON.parse(event.data); if(msg.v !== state.v) refresh(); } catch (_) {}
+    };
+    socket.onclose = function(){ socket=null; if(DashAuth.isSignedIn() && document.visibilityState==='visible') { reconnectTimer=setTimeout(connectLive,reconnectDelay); reconnectDelay=Math.min(30000,reconnectDelay*2); } };
+    socket.onerror = function(){ try {socket.close();} catch (_){} };
+  }
   function enter() {
     $('gate').style.display = 'none';
     $('app').hidden = false;
     $('who').textContent = DashAuth.email() || '';
     refresh();
+    connectLive();
     clearInterval(state.pollTimer);
     state.pollTimer = setInterval(checkVersion, VER_MS);
     clearInterval(state.tickTimer);
@@ -241,10 +256,10 @@
       err.textContent = 'Dashboard backend is not connected yet. Check back soon.';
       return;
     }
-    window.addEventListener('online', function () { checkVersion(true); });
+    window.addEventListener('online', function () { checkVersion(true); connectLive(); });
     window.addEventListener('pageshow', function () { checkVersion(true); });
     document.addEventListener('visibilitychange', function () {
-      if (document.visibilityState === 'visible') checkVersion(true);
+      if (document.visibilityState === 'visible') { checkVersion(true); connectLive(); } else if(socket) socket.close();
     });
     if (DashAuth.isSignedIn()) enter(); else showGate();
   });
