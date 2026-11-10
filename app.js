@@ -1,6 +1,7 @@
 /* Dashboard UI logic. */
 (function () {
   var state = { data: null, project: 'all', pollTimer: null, tickTimer: null, v: null, expanded: {} };
+  var receivedAt=null, connection='Connecting', refreshBusy=false, refreshAgain=false;
   var VER_MS = 30000; // cheap version poll; full data only loads when the version changes
 
   function $(id) { return document.getElementById(id); }
@@ -48,7 +49,7 @@
     open.forEach(function (t) { counts[t.project_id] = (counts[t.project_id] || 0) + 1; });
     var html = '<button class="proj-item' + (state.project === 'all' ? ' active' : '') + '" data-p="all">All projects' +
       '<span class="count">' + open.length + '</span></button>';
-    (d.projects || []).forEach(function (p) {
+    (d.projects || []).slice().sort(function(a,b){return String(b.updated_at || b.created_at).localeCompare(String(a.updated_at || a.created_at));}).forEach(function (p) {
       html += '<button class="proj-item' + (state.project === String(p.id) ? ' active' : '') + '" data-p="' + esc(p.id) + '">' +
         esc(p.name) + '<span class="count">' + (counts[p.id] || 0) + '</span></button>';
     });
@@ -89,7 +90,8 @@
         '<span class="msg">' + esc(l.message) + '</span></div>';
     }).join('') : '<div class="empty">No activity yet.</div>';
 
-    $('last-sync').textContent = 'Updated ' + fmtWhen(d.ts);
+    updateSync();
+    var select=$('project-picker'); if(select){ select.innerHTML='<option value="all">All projects</option>'+(d.projects || []).map(function(p){return '<option value="'+esc(p.id)+'">'+esc(p.name)+'</option>';}).join('');select.value=state.project; }
   }
 
   function safeLink(url) { return /^https?:\/\//i.test(String(url || '')) ? esc(url) : '#'; }
@@ -192,7 +194,17 @@
     await refresh();
   }
 
+  function updateSync() {
+    var el=$('last-sync'); if(!el)return;
+    el.textContent=connection+' | Last update received: '+(receivedAt ? new Date(receivedAt).toLocaleTimeString() : 'waiting')+(receivedAt && Date.now()-receivedAt>90000 ? ' (check connection)' : '');
+    el.setAttribute('role','status');
+  }
   async function refresh() {
+    if(refreshBusy){refreshAgain=true;return;}
+    refreshBusy=true;
+    try { await refreshNow(); } finally {refreshBusy=false;if(refreshAgain){refreshAgain=false;refresh();}}
+  }
+  async function refreshNow() {
     var eb = $('app-error');
     var r;
     try {
@@ -208,7 +220,7 @@
     }
     if (eb) eb.hidden = true;
     if (r.v !== undefined) state.v = r.v;
-    state.data = r.data;
+    state.data = r.data; receivedAt=Date.now(); updateSync();
     try {
       render();
       tick();
@@ -242,9 +254,10 @@
     try {
       var r = await fetch((window.DASH_CONFIG || {}).endpoint + '?action=version').then(function (x) { return x.json(); });
       if (!r || r.v === undefined) return;
+      receivedAt=Date.now(); updateSync();
       if (state.v === null) { await refresh(); return; }
       if (force || r.v !== state.v || !state.data) await refresh();
-    } catch (e) { /* offline or sleeping - next tick retries */ }
+    } catch (e) { connection='Offline / retrying'; updateSync(); }
   }
 
   var socket=null, reconnectTimer=null, reconnectDelay=1000;
@@ -252,18 +265,24 @@
     if (!DashAuth.isSignedIn() || document.visibilityState !== 'visible') return;
     if (socket && (socket.readyState === 0 || socket.readyState === 1)) return;
     clearTimeout(reconnectTimer);
+    connection='Connecting';updateSync();
     socket = new WebSocket(DashAuth.watchUrl());
-    socket.onopen = function(){ reconnectDelay=1000; checkVersion(true); };
+    socket.onopen = function(){ connection='Live connected';updateSync(); reconnectDelay=1000; checkVersion(true); };
     socket.onmessage = function(event){
       try { var msg=JSON.parse(event.data); if(msg.v !== state.v) refresh(); } catch (_) {}
     };
-    socket.onclose = function(){ socket=null; if(DashAuth.isSignedIn() && document.visibilityState==='visible') { reconnectTimer=setTimeout(connectLive,reconnectDelay); reconnectDelay=Math.min(30000,reconnectDelay*2); } };
+    socket.onclose = function(){ connection='Reconnecting (30s safety check)';updateSync(); socket=null; if(DashAuth.isSignedIn() && document.visibilityState==='visible') { reconnectTimer=setTimeout(connectLive,reconnectDelay); reconnectDelay=Math.min(30000,reconnectDelay*2); } };
     socket.onerror = function(){ try {socket.close();} catch (_){} };
   }
   function enter() {
     $('gate').style.display = 'none';
     $('app').hidden = false;
     $('who').textContent = DashAuth.email() || '';
+    if(!$('refresh-now')){
+      var btn=document.createElement('button');btn.id='refresh-now';btn.className='btn ghost';btn.textContent='Refresh now';btn.onclick=function(){refresh();connectLive();};$('last-sync').after(btn);
+      var picker=document.createElement('select');picker.id='project-picker';picker.setAttribute('aria-label','Choose project');picker.style.cssText='display:block;width:100%;padding:10px;margin-bottom:12px;background:#1b2430;color:#e8ecf1;border:1px solid #3a4655;border-radius:8px';picker.onchange=function(){state.project=picker.value;render();};$('project-title').before(picker);
+      var style=document.createElement('style');style.textContent='@media(max-width:720px){.sidebar{flex-wrap:wrap;overflow:visible}.proj-item{width:auto;white-space:normal;max-width:100%}.topbar{position:static;flex-wrap:wrap}.top-right{justify-content:flex-start}#last-sync{display:block;width:100%}}';document.head.appendChild(style);
+    }
     refresh();
     connectLive();
     clearInterval(state.pollTimer);
