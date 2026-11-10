@@ -1,6 +1,6 @@
 /* Dashboard UI logic. */
 (function () {
-  var state = { data: null, project: 'all', pollTimer: null, tickTimer: null, v: null, expanded: {} };
+  var state = { data: null, project: null, pollTimer: null, tickTimer: null, v: null, expanded: {} };
   var receivedAt=null, connection='Connecting', refreshBusy=false, refreshAgain=false;
   var VER_MS = 30000; // cheap version poll; full data only loads when the version changes
 
@@ -42,6 +42,10 @@
     var d = state.data;
     if (!d) return;
     var tasks = d.tasks || [];
+    if(state.project===null){
+      var newest=(d.projects || []).slice().sort(function(a,b){return String(b.updated_at || b.created_at).localeCompare(String(a.updated_at || a.created_at));})[0];
+      state.project=newest ? String(newest.id) : 'all';
+    }
     var open = tasks.filter(function (t) { return t.status !== 'resolved'; });
 
     // Sidebar
